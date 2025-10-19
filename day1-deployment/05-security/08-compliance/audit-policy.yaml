@@ -1,0 +1,183 @@
+---
+# Kubernetes Audit Policy for production
+apiVersion: audit.k8s.io/v1
+kind: Policy
+metadata:
+  name: audit-policy
+rules:
+# Don't log requests to certain non-resource URLs
+- level: None
+  nonResourceURLs:
+  - /healthz*
+  - /version
+  - /swagger*
+  - /metrics
+
+# Don't log watch requests
+- level: None
+  verbs: ["watch"]
+
+# Don't log authenticated requests to certain non-resource URLs
+- level: None
+  userGroups: ["system:authenticated"]
+  nonResourceURLs:
+  - /api*
+  - /apis*
+
+# Log pod exec/attach/portforward at Metadata level
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["pods/exec", "pods/portforward", "pods/attach"]
+
+# Log changes to secrets (without request/response bodies)
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["secrets"]
+  verbs: ["get", "create", "update", "patch", "delete"]
+
+# Log all authentication and authorization decisions
+- level: RequestResponse
+  verbs: ["create", "update", "patch", "delete"]
+  resources:
+  - group: "rbac.authorization.k8s.io"
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+
+# Log security policy changes
+- level: RequestResponse
+  verbs: ["create", "update", "patch", "delete"]
+  resources:
+  - group: "policy"
+    resources: ["podsecuritypolicies"]
+  - group: "networking.k8s.io"
+    resources: ["networkpolicies"]
+  - group: "cilium.io"
+    resources: ["ciliumnetworkpolicies"]
+
+# Log configmap and secret changes in production
+- level: Request
+  verbs: ["create", "update", "patch", "delete"]
+  namespaces: ["production"]
+  resources:
+  - group: ""
+    resources: ["configmaps", "secrets"]
+
+# Log all changes to production workloads
+- level: Request
+  verbs: ["create", "update", "patch", "delete"]
+  namespaces: ["production"]
+  resources:
+  - group: "apps"
+    resources: ["deployments", "statefulsets", "daemonsets"]
+  - group: "batch"
+    resources: ["jobs", "cronjobs"]
+
+# Log service account token requests
+- level: Metadata
+  resources:
+  - group: ""
+    resources: ["serviceaccounts/token"]
+
+# Log admission webhook changes
+- level: RequestResponse
+  resources:
+  - group: "admissionregistration.k8s.io"
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+
+# Log custom resource changes
+- level: Request
+  verbs: ["create", "update", "patch", "delete"]
+  resources:
+  - group: "*"
+    resources: ["*"]
+
+# Default: log metadata for everything else
+- level: Metadata
+---
+# Falco audit configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-audit-rules
+  namespace: falco
+data:
+  k8s_audit_rules.yaml: |
+    # Detect ServiceAccount token access
+    - rule: ServiceAccount Token Access
+      desc: Detect when a service account token is accessed
+      condition: >
+        kget and
+        ka.target.resource = "serviceaccounts/token" and
+        ka.auth.decision = "allow"
+      output: >
+        ServiceAccount token accessed
+        (user=%ka.user.name resource=%ka.target.name
+        namespace=%ka.target.namespace decision=%ka.auth.decision)
+      priority: WARNING
+      source: k8s_audit
+      tags: [k8s, authentication]
+    
+    # Detect creation of privileged pods
+    - rule: Create Privileged Pod
+      desc: Detect creation of privileged pods
+      condition: >
+        kcreate and
+        ka.target.resource = "pods" and
+        ka.req.pod.containers.privileged = true
+      output: >
+        Privileged pod created
+        (user=%ka.user.name pod=%ka.target.name
+        namespace=%ka.target.namespace image=%ka.req.pod.containers.image)
+      priority: WARNING
+      source: k8s_audit
+      tags: [k8s, privileged]
+    
+    # Detect RBAC changes
+    - rule: RBAC Changes
+      desc: Detect changes to RBAC resources
+      condition: >
+        (kcreate or kupdate or kdelete) and
+        ka.target.resource in (roles, rolebindings, clusterroles, clusterrolebindings)
+      output: >
+        RBAC resource modified
+        (user=%ka.user.name action=%ka.verb resource=%ka.target.resource
+        name=%ka.target.name namespace=%ka.target.namespace)
+      priority: WARNING
+      source: k8s_audit
+      tags: [k8s, rbac, security]
+    
+    # Detect secret access
+    - rule: Secret Access
+      desc: Detect when secrets are accessed
+      condition: >
+        kget and
+        ka.target.resource = "secrets" and
+        not ka.user.name in (allowed_secret_readers)
+      output: >
+        Secret accessed by user
+        (user=%ka.user.name secret=%ka.target.name
+        namespace=%ka.target.namespace)
+      priority: INFO
+      source: k8s_audit
+      tags: [k8s, secrets]
+    
+    # Detect network policy changes
+    - rule: Network Policy Modified
+      desc: Detect changes to network policies
+      condition: >
+        (kcreate or kupdate or kdelete) and
+        ka.target.resource = "networkpolicies"
+      output: >
+        Network policy modified
+        (user=%ka.user.name action=%ka.verb policy=%ka.target.name
+        namespace=%ka.target.namespace)
+      priority: WARNING
+      source: k8s_audit
+      tags: [k8s, network, security]
+    
+    - list: allowed_secret_readers
+      items:
+        - system:serviceaccount:kube-system:generic-garbage-collector
+        - system:serviceaccount:kube-system:cronjob-controller
+        - system:serviceaccount:external-secrets:external-secrets

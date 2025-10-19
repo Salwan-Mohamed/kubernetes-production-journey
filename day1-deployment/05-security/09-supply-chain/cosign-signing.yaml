@@ -1,0 +1,171 @@
+---
+# Sigstore configuration for image signing
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cosign-config
+  namespace: cicd
+data:
+  sign-image.sh: |
+    #!/bin/bash
+    set -e
+    
+    IMAGE=$1
+    
+    if [ -z "$IMAGE" ]; then
+      echo "Usage: $0 <image>"
+      exit 1
+    fi
+    
+    echo "Signing image: $IMAGE"
+    
+    # Sign the image using keyless signing (OIDC)
+    cosign sign --yes $IMAGE
+    
+    # Generate and attach SBOM
+    syft $IMAGE -o cyclonedx-json > sbom.json
+    cosign attach sbom --sbom sbom.json $IMAGE
+    
+    # Sign the SBOM
+    cosign sign --yes $(cosign triangulate $IMAGE --type sbom)
+    
+    # Generate and attach attestation
+    cosign attest --yes \
+      --predicate sbom.json \
+      --type cyclonedx \
+      $IMAGE
+    
+    echo "Image signed and attested successfully"
+  
+  verify-image.sh: |
+    #!/bin/bash
+    set -e
+    
+    IMAGE=$1
+    
+    if [ -z "$IMAGE" ]; then
+      echo "Usage: $0 <image>"
+      exit 1
+    fi
+    
+    echo "Verifying image: $IMAGE"
+    
+    # Verify signature (keyless)
+    cosign verify \
+      --certificate-identity-regexp=".*" \
+      --certificate-oidc-issuer-regexp=".*" \
+      $IMAGE
+    
+    # Verify SBOM attestation
+    cosign verify-attestation \
+      --type cyclonedx \
+      --certificate-identity-regexp=".*" \
+      --certificate-oidc-issuer-regexp=".*" \
+      $IMAGE
+    
+    echo "Image verification successful"
+---
+# Kyverno policy for signature verification
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signature-cosign
+  annotations:
+    policies.kyverno.io/title: Verify Image Signature with Cosign
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+spec:
+  validationFailureAction: Enforce
+  webhookTimeoutSeconds: 30
+  failurePolicy: Fail
+  rules:
+  - name: verify-signature
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+    verifyImages:
+    - imageReferences:
+      - "registry.example.com/*"
+      attestors:
+      - count: 1
+        entries:
+        - keyless:
+            subject: "https://github.com/{{ request.object.metadata.namespace }}/*"
+            issuer: "https://token.actions.githubusercontent.com"
+            rekor:
+              url: https://rekor.sigstore.dev
+      attestations:
+      - predicateType: https://cyclonedx.org/bom
+        attestors:
+        - count: 1
+          entries:
+          - keyless:
+              subject: "https://github.com/{{ request.object.metadata.namespace }}/*"
+              issuer: "https://token.actions.githubusercontent.com"
+              rekor:
+                url: https://rekor.sigstore.dev
+---
+# SLSA Provenance generation
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slsa-provenance
+  namespace: cicd
+data:
+  generate-provenance.sh: |
+    #!/bin/bash
+    set -e
+    
+    IMAGE=$1
+    
+    cat > provenance.json <<EOF
+    {
+      "_type": "https://in-toto.io/Statement/v0.1",
+      "predicateType": "https://slsa.dev/provenance/v0.2",
+      "subject": [
+        {
+          "name": "$IMAGE",
+          "digest": {
+            "sha256": "$(crane digest $IMAGE | cut -d: -f2)"
+          }
+        }
+      ],
+      "predicate": {
+        "builder": {
+          "id": "https://github.com/actions/runner/github-hosted"
+        },
+        "buildType": "https://github.com/actions/workflow@v1",
+        "invocation": {
+          "configSource": {
+            "uri": "git+$GITHUB_SERVER_URL/$GITHUB_REPOSITORY@$GITHUB_REF",
+            "digest": {
+              "sha1": "$GITHUB_SHA"
+            },
+            "entryPoint": ".github/workflows/build.yml"
+          }
+        },
+        "metadata": {
+          "buildStartedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "buildFinishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "completeness": {
+            "parameters": true,
+            "environment": true,
+            "materials": true
+          },
+          "reproducible": false
+        }
+      }
+    }
+    EOF
+    
+    # Attach provenance to image
+    cosign attest --yes \
+      --predicate provenance.json \
+      --type slsaprovenance \
+      $IMAGE
+    
+    echo "SLSA provenance generated and attached"
