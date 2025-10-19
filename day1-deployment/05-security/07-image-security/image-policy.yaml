@@ -1,0 +1,86 @@
+---
+# ImagePolicy using Kyverno - Enforce trusted registries
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Restrict Image Registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Only allow images from approved registries
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: validate-registries
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    validate:
+      message: "Images must come from approved registries: registry.example.com, gcr.io/myproject"
+      pattern:
+        spec:
+          containers:
+          - image: "registry.example.com/* | gcr.io/myproject/*"
+          =(initContainers):
+          - image: "registry.example.com/* | gcr.io/myproject/*"
+---
+# Require image digest instead of tags
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-image-digest
+  annotations:
+    policies.kyverno.io/title: Require Image Digest
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: require-digest
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    validate:
+      message: "Images must use digest (sha256) instead of tags"
+      pattern:
+        spec:
+          containers:
+          - image: "*@sha256:*"
+          =(initContainers):
+          - image: "*@sha256:*"
+---
+# Block latest tag
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow Latest Tag
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: disallow-latest-tag
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    validate:
+      message: "Using 'latest' tag is not allowed"
+      pattern:
+        spec:
+          containers:
+          - image: "!*:latest"
+          =(initContainers):
+          - image: "!*:latest"

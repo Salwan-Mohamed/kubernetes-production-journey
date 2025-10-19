@@ -1,0 +1,120 @@
+---
+# Cosign public key secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cosign-public-key
+  namespace: kube-system
+type: Opaque
+stringData:
+  cosign.pub: |
+    -----BEGIN PUBLIC KEY-----
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+    -----END PUBLIC KEY-----
+---
+# Image signing script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-signing-script
+  namespace: cicd
+data:
+  sign-image.sh: |
+    #!/bin/bash
+    set -e
+    
+    IMAGE=$1
+    
+    if [ -z "$IMAGE" ]; then
+      echo "Usage: $0 <image>"
+      exit 1
+    fi
+    
+    # Sign the image
+    echo "Signing image: $IMAGE"
+    cosign sign --key cosign.key $IMAGE
+    
+    # Generate SBOM
+    echo "Generating SBOM for: $IMAGE"
+    syft $IMAGE -o spdx-json > sbom.spdx.json
+    
+    # Attach SBOM to image
+    cosign attach sbom --sbom sbom.spdx.json $IMAGE
+    
+    # Sign the SBOM
+    cosign sign --key cosign.key --attachment sbom $IMAGE
+    
+    # Generate provenance
+    echo "Generating provenance"
+    cat > provenance.json <<EOF
+    {
+      "_type": "https://in-toto.io/Statement/v0.1",
+      "subject": [{
+        "name": "$IMAGE",
+        "digest": {
+          "sha256": "$(cosign triangulate $IMAGE | grep sha256 | cut -d: -f2)"
+        }
+      }],
+      "predicateType": "https://slsa.dev/provenance/v0.2",
+      "predicate": {
+        "builder": {
+          "id": "https://github.com/actions/runner"
+        },
+        "buildType": "https://github.com/actions/workflow/v1",
+        "invocation": {
+          "configSource": {
+            "uri": "$GITHUB_REPOSITORY",
+            "digest": {
+              "sha1": "$GITHUB_SHA"
+            },
+            "entryPoint": ".github/workflows/build.yml"
+          }
+        },
+        "metadata": {
+          "buildStartedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "buildFinishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "completeness": {
+            "parameters": true,
+            "environment": true,
+            "materials": true
+          },
+          "reproducible": false
+        }
+      }
+    }
+    EOF
+    
+    # Attach and sign provenance
+    cosign attest --key cosign.key --predicate provenance.json $IMAGE
+    
+    echo "Image signing complete!"
+    echo "Verify with: cosign verify --key cosign.pub $IMAGE"
+---
+# Verification script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-verification-script
+  namespace: cicd
+data:
+  verify-image.sh: |
+    #!/bin/bash
+    set -e
+    
+    IMAGE=$1
+    
+    if [ -z "$IMAGE" ]; then
+      echo "Usage: $0 <image>"
+      exit 1
+    fi
+    
+    echo "Verifying image signature: $IMAGE"
+    cosign verify --key cosign.pub $IMAGE
+    
+    echo "Verifying SBOM attestation"
+    cosign verify-attestation --key cosign.pub --type spdx $IMAGE
+    
+    echo "Verifying provenance attestation"
+    cosign verify-attestation --key cosign.pub --type slsaprovenance $IMAGE
+    
+    echo "All verifications passed!"

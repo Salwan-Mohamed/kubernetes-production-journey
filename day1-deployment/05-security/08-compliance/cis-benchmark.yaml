@@ -1,28 +1,23 @@
 ---
-# kube-bench Job for CIS Kubernetes Benchmark
+# CIS Benchmark Job using kube-bench
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: kube-bench
-  namespace: security
+  name: cis-benchmark-scan
+  namespace: kube-system
 spec:
   template:
     metadata:
       labels:
-        app: kube-bench
+        app: cis-benchmark
     spec:
       hostPID: true
       hostNetwork: true
-      serviceAccountName: kube-bench
+      serviceAccountName: cis-benchmark
       containers:
       - name: kube-bench
         image: aquasec/kube-bench:v0.7.1
-        command: ["kube-bench"]
-        args:
-        - "run"
-        - "--targets"
-        - "master,node,etcd,policies"
-        - "--json"
+        command: ["kube-bench", "run", "--targets", "node,policies,managedservices", "--json"]
         volumeMounts:
         - name: var-lib-etcd
           mountPath: /var/lib/etcd
@@ -30,23 +25,14 @@ spec:
         - name: var-lib-kubelet
           mountPath: /var/lib/kubelet
           readOnly: true
-        - name: var-lib-kube-scheduler
-          mountPath: /var/lib/kube-scheduler
-          readOnly: true
-        - name: var-lib-kube-controller-manager
-          mountPath: /var/lib/kube-controller-manager
-          readOnly: true
         - name: etc-systemd
           mountPath: /etc/systemd
-          readOnly: true
-        - name: lib-systemd
-          mountPath: /lib/systemd/
           readOnly: true
         - name: etc-kubernetes
           mountPath: /etc/kubernetes
           readOnly: true
-        - name: etc-cni-netd
-          mountPath: /etc/cni/net.d/
+        - name: usr-bin
+          mountPath: /usr/local/mount-from-host/bin
           readOnly: true
       restartPolicy: Never
       volumes:
@@ -56,35 +42,26 @@ spec:
       - name: var-lib-kubelet
         hostPath:
           path: /var/lib/kubelet
-      - name: var-lib-kube-scheduler
-        hostPath:
-          path: /var/lib/kube-scheduler
-      - name: var-lib-kube-controller-manager
-        hostPath:
-          path: /var/lib/kube-controller-manager
       - name: etc-systemd
         hostPath:
           path: /etc/systemd
-      - name: lib-systemd
-        hostPath:
-          path: /lib/systemd
       - name: etc-kubernetes
         hostPath:
           path: /etc/kubernetes
-      - name: etc-cni-netd
+      - name: usr-bin
         hostPath:
-          path: /etc/cni/net.d/
+          path: /usr/bin
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: kube-bench
-  namespace: security
+  name: cis-benchmark
+  namespace: kube-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kube-bench
+  name: cis-benchmark
 rules:
 - apiGroups: [""]
   resources: ["nodes"]
@@ -92,68 +69,16 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list"]
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources: ["clusterroles", "clusterrolebindings"]
-  verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kube-bench
+  name: cis-benchmark
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: kube-bench
+  name: cis-benchmark
 subjects:
 - kind: ServiceAccount
-  name: kube-bench
-  namespace: security
----
-# Polaris configuration for workload validation
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: polaris-config
-  namespace: security
-data:
-  config.yaml: |
-    checks:
-      # Security
-      hostIPCSet: danger
-      hostPIDSet: danger
-      hostNetworkSet: warning
-      hostPortSet: warning
-      privilegeEscalationAllowed: danger
-      runAsRootAllowed: warning
-      runAsPrivileged: danger
-      insecureCapabilities: warning
-      dangerousCapabilities: danger
-      
-      # Resources
-      cpuRequestsMissing: warning
-      cpuLimitsMissing: warning
-      memoryRequestsMissing: warning
-      memoryLimitsMissing: warning
-      
-      # Images
-      tagNotSpecified: danger
-      pullPolicyNotAlways: warning
-      
-      # Networking
-      hostNetworkSet: warning
-      hostPortSet: warning
-      
-      # Health Checks
-      readinessProbeMissing: warning
-      livenessProbeMissing: warning
-    
-    exemptions:
-    - namespace: kube-system
-      controllerNames:
-      - kube-apiserver
-      - kube-proxy
-      - kube-scheduler
-      - etcd-manager-events
-      - kube-controller-manager
-      - kube-dns
-      - etcd-manager-main
+  name: cis-benchmark
+  namespace: kube-system
