@@ -1,0 +1,241 @@
+---
+# Vault ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: vault
+---
+# Vault ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vault-auth
+rules:
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["serviceaccounts/token"]
+  verbs: ["create"]
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+---
+# Vault ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-auth-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vault-auth
+subjects:
+- kind: ServiceAccount
+  name: vault
+  namespace: vault
+---
+# Vault Helm values for production
+# vault-values.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-helm-values
+  namespace: vault
+data:
+  values.yaml: |
+    global:
+      enabled: true
+      tlsDisable: false
+    
+    server:
+      enabled: true
+      
+      image:
+        repository: hashicorp/vault
+        tag: 1.15.4
+        pullPolicy: IfNotPresent
+      
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 250m
+        limits:
+          memory: 1Gi
+          cpu: 1000m
+      
+      readinessProbe:
+        enabled: true
+        path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
+      
+      livenessProbe:
+        enabled: true
+        path: /v1/sys/health?standbyok=true
+        initialDelaySeconds: 60
+      
+      auditStorage:
+        enabled: true
+        size: 10Gi
+        storageClass: fast-ssd
+      
+      dataStorage:
+        enabled: true
+        size: 20Gi
+        storageClass: fast-ssd
+      
+      ha:
+        enabled: true
+        replicas: 3
+        raft:
+          enabled: true
+          setNodeId: true
+          config: |
+            ui = true
+            
+            listener "tcp" {
+              tls_disable = 0
+              address = "[::]:8200"
+              cluster_address = "[::]:8201"
+              tls_cert_file = "/vault/tls/tls.crt"
+              tls_key_file = "/vault/tls/tls.key"
+              tls_client_ca_file = "/vault/tls/ca.crt"
+            }
+            
+            storage "raft" {
+              path = "/vault/data"
+              
+              retry_join {
+                leader_api_addr = "https://vault-0.vault-internal:8200"
+                leader_ca_cert_file = "/vault/tls/ca.crt"
+                leader_client_cert_file = "/vault/tls/tls.crt"
+                leader_client_key_file = "/vault/tls/tls.key"
+              }
+              
+              retry_join {
+                leader_api_addr = "https://vault-1.vault-internal:8200"
+                leader_ca_cert_file = "/vault/tls/ca.crt"
+                leader_client_cert_file = "/vault/tls/tls.crt"
+                leader_client_key_file = "/vault/tls/tls.key"
+              }
+              
+              retry_join {
+                leader_api_addr = "https://vault-2.vault-internal:8200"
+                leader_ca_cert_file = "/vault/tls/ca.crt"
+                leader_client_cert_file = "/vault/tls/tls.crt"
+                leader_client_key_file = "/vault/tls/tls.key"
+              }
+            }
+            
+            seal "awskms" {
+              region = "us-east-1"
+              kms_key_id = "your-kms-key-id"
+            }
+            
+            telemetry {
+              prometheus_retention_time = "30s"
+              disable_hostname = true
+            }
+      
+      serviceAccount:
+        create: true
+        name: vault
+    
+    ui:
+      enabled: true
+      serviceType: ClusterIP
+---
+# External Secrets Operator - SecretStore
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: vault-backend
+  namespace: production
+spec:
+  provider:
+    vault:
+      server: "https://vault.vault.svc.cluster.local:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        kubernetes:
+          mountPath: "kubernetes"
+          role: "production-app"
+          serviceAccountRef:
+            name: production-app
+---
+# External Secret definition
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: app-secrets
+  namespace: production
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: SecretStore
+  target:
+    name: app-secrets
+    creationPolicy: Owner
+  data:
+  - secretKey: database-password
+    remoteRef:
+      key: production/database
+      property: password
+  - secretKey: api-key
+    remoteRef:
+      key: production/api
+      property: key
+  - secretKey: jwt-secret
+    remoteRef:
+      key: production/auth
+      property: jwt-secret
+---
+# Vault authentication configuration script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-init-script
+  namespace: vault
+data:
+  init.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Wait for Vault to be ready
+    until vault status; do
+      echo "Waiting for Vault..."
+      sleep 5
+    done
+    
+    # Enable Kubernetes auth method
+    vault auth enable kubernetes
+    
+    # Configure Kubernetes auth
+    vault write auth/kubernetes/config \
+      kubernetes_host="https://$KUBERNETES_PORT_443_TCP_ADDR:443" \
+      kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+      token_reviewer_jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token
+    
+    # Create policy for production apps
+    vault policy write production-app - <<EOF
+    path "secret/data/production/*" {
+      capabilities = ["read", "list"]
+    }
+    EOF
+    
+    # Create role
+    vault write auth/kubernetes/role/production-app \
+      bound_service_account_names=production-app \
+      bound_service_account_namespaces=production \
+      policies=production-app \
+      ttl=24h
+    
+    # Enable secrets engine
+    vault secrets enable -path=secret kv-v2
+    
+    # Example: Write a secret
+    vault kv put secret/production/database \
+      password="changeme" \
+      username="app"
