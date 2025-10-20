@@ -1,0 +1,84 @@
+---
+# CIS Benchmark Job using kube-bench
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cis-benchmark-scan
+  namespace: kube-system
+spec:
+  template:
+    metadata:
+      labels:
+        app: cis-benchmark
+    spec:
+      hostPID: true
+      hostNetwork: true
+      serviceAccountName: cis-benchmark
+      containers:
+      - name: kube-bench
+        image: aquasec/kube-bench:v0.7.1
+        command: ["kube-bench", "run", "--targets", "node,policies,managedservices", "--json"]
+        volumeMounts:
+        - name: var-lib-etcd
+          mountPath: /var/lib/etcd
+          readOnly: true
+        - name: var-lib-kubelet
+          mountPath: /var/lib/kubelet
+          readOnly: true
+        - name: etc-systemd
+          mountPath: /etc/systemd
+          readOnly: true
+        - name: etc-kubernetes
+          mountPath: /etc/kubernetes
+          readOnly: true
+        - name: usr-bin
+          mountPath: /usr/local/mount-from-host/bin
+          readOnly: true
+      restartPolicy: Never
+      volumes:
+      - name: var-lib-etcd
+        hostPath:
+          path: /var/lib/etcd
+      - name: var-lib-kubelet
+        hostPath:
+          path: /var/lib/kubelet
+      - name: etc-systemd
+        hostPath:
+          path: /etc/systemd
+      - name: etc-kubernetes
+        hostPath:
+          path: /etc/kubernetes
+      - name: usr-bin
+        hostPath:
+          path: /usr/bin
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cis-benchmark
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cis-benchmark
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cis-benchmark
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cis-benchmark
+subjects:
+- kind: ServiceAccount
+  name: cis-benchmark
+  namespace: kube-system

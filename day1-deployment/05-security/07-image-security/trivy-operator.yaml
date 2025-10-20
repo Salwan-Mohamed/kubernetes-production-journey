@@ -1,0 +1,84 @@
+---
+# Trivy Operator for continuous vulnerability scanning
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trivy-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trivy-operator
+  namespace: trivy-system
+---
+# Trivy ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trivy-operator-config
+  namespace: trivy-system
+data:
+  # Scanning configuration
+  scanJob.tolerations: |
+    - key: node-role.kubernetes.io/master
+      effect: NoSchedule
+  scanJob.podSecurityContext: |
+    runAsUser: 65534
+    runAsNonRoot: true
+    fsGroup: 65534
+  scanJob.securityContext: |
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  
+  # Vulnerability scanning
+  vulnerabilityReports.scanner: "Trivy"
+  trivy.severity: "CRITICAL,HIGH,MEDIUM"
+  trivy.ignoreUnfixed: "false"
+  trivy.timeout: "5m"
+  
+  # SBOM generation
+  trivy.sbom.enabled: "true"
+  
+  # Compliance
+  compliance.enabled: "true"
+  compliance.cron: "0 */6 * * *"
+---
+# VulnerabilityReport CRD example
+apiVersion: aquasecurity.github.io/v1alpha1
+kind: VulnerabilityReport
+metadata:
+  name: example-vulnerability-report
+  namespace: production
+  labels:
+    trivy-operator.resource.kind: Deployment
+    trivy-operator.resource.name: backend
+spec:
+  registry:
+    server: registry.example.com
+  artifact:
+    repository: backend
+    tag: v1.2.3
+  scanner:
+    name: Trivy
+    vendor: Aqua Security
+    version: 0.47.0
+---
+# ClusterComplianceReport for CIS Kubernetes Benchmark
+apiVersion: aquasecurity.github.io/v1alpha1
+kind: ClusterComplianceReport
+metadata:
+  name: cis-kubernetes-benchmark
+spec:
+  compliance:
+    title: CIS Kubernetes Benchmark v1.8
+    version: "1.8"
+    controls:
+    - id: "1.1.1"
+      name: "Ensure that the API server pod specification file permissions are set to 644 or more restrictive"
+      severity: HIGH
+    - id: "5.1.1"
+      name: "Ensure that the cluster-admin role is only used where required"
+      severity: CRITICAL

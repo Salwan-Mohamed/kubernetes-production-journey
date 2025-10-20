@@ -1,0 +1,143 @@
+---
+# Trivy Operator configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trivy-operator-config
+  namespace: trivy-system
+data:
+  # Scan job configuration
+  scanJob.timeout: "5m"
+  scanJob.ttlAfterFinished: "3600"
+  
+  # Vulnerability scanner configuration
+  vulnerabilityReports.scanner: "Trivy"
+  trivy.severity: "CRITICAL,HIGH,MEDIUM"
+  trivy.ignoreUnfixed: "false"
+  trivy.timeout: "5m0s"
+  
+  # SBOM generation
+  trivy.sbomSources: "rekor"
+  
+  # Policy report configuration
+  compliance.failEntriesLimit: "10"
+---
+# VulnerabilityReport example output
+apiVersion: aquasecurity.github.io/v1alpha1
+kind: VulnerabilityReport
+metadata:
+  name: deployment-nginx
+  namespace: production
+  labels:
+    trivy-operator.resource.kind: Deployment
+    trivy-operator.resource.name: nginx
+spec:
+  artifact:
+    repository: nginx
+    tag: "1.21"
+  registry:
+    server: docker.io
+  scanner:
+    name: Trivy
+    vendor: Aqua Security
+    version: 0.46.0
+  summary:
+    criticalCount: 0
+    highCount: 2
+    mediumCount: 5
+    lowCount: 10
+  vulnerabilities:
+  - fixedVersion: 1.1.1n-0+deb11u3
+    installedVersion: 1.1.1n-0+deb11u2
+    primaryLink: https://avd.aquasec.com/nvd/cve-2023-0286
+    resource: libssl1.1
+    score: 7.4
+    severity: HIGH
+    title: X.509 certificate verification bypass
+    vulnerabilityID: CVE-2023-0286
+---
+# Kyverno policy to block images with HIGH/CRITICAL vulnerabilities
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-vulnerable-images
+  annotations:
+    policies.kyverno.io/title: Block Vulnerable Images
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Blocks deployment of images with HIGH or CRITICAL vulnerabilities
+spec:
+  validationFailureAction: Enforce
+  background: false
+  webhookTimeoutSeconds: 30
+  failurePolicy: Fail
+  rules:
+  - name: check-vulnerabilities
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    context:
+    - name: vulnReport
+      apiCall:
+        urlPath: "/apis/aquasecurity.github.io/v1alpha1/namespaces/{{request.namespace}}/vulnerabilityreports"
+        jmesPath: "items[?spec.artifact.repository=='{{request.object.spec.containers[0].image}}'] | [0]"
+    validate:
+      message: >-
+        Image {{request.object.spec.containers[0].image}} has 
+        {{vulnReport.spec.summary.criticalCount}} CRITICAL and 
+        {{vulnReport.spec.summary.highCount}} HIGH vulnerabilities.
+      deny:
+        conditions:
+          any:
+          - key: "{{vulnReport.spec.summary.criticalCount}}"
+            operator: GreaterThan
+            value: 0
+          - key: "{{vulnReport.spec.summary.highCount}}"
+            operator: GreaterThan
+            value: 5
+---
+# Image scanning CI/CD integration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-scan-script
+  namespace: cicd
+data:
+  scan.sh: |
+    #!/bin/bash
+    set -e
+    
+    IMAGE=$1
+    SEVERITY_THRESHOLD="HIGH,CRITICAL"
+    
+    echo "Scanning image: $IMAGE"
+    
+    # Run Trivy scan
+    trivy image \
+      --severity $SEVERITY_THRESHOLD \
+      --exit-code 1 \
+      --no-progress \
+      --format json \
+      --output scan-results.json \
+      $IMAGE
+    
+    # Generate SBOM
+    trivy image \
+      --format cyclonedx \
+      --output sbom.json \
+      $IMAGE
+    
+    # Upload results to artifact repository
+    echo "Scan completed successfully"
+    
+    # Check for critical vulnerabilities
+    CRITICAL_COUNT=$(jq '.Results[].Vulnerabilities | map(select(.Severity=="CRITICAL")) | length' scan-results.json | jq -s add)
+    
+    if [ "$CRITICAL_COUNT" -gt 0 ]; then
+      echo "ERROR: Found $CRITICAL_COUNT critical vulnerabilities"
+      exit 1
+    fi
+    
+    echo "Image passed security scan"

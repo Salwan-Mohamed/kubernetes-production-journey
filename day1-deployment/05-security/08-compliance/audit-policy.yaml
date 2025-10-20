@@ -1,0 +1,86 @@
+---
+# Kubernetes Audit Policy
+apiVersion: audit.k8s.io/v1
+kind: Policy
+metadata:
+  name: audit-policy
+rules:
+  # Log all requests at RequestResponse level for critical resources
+  - level: RequestResponse
+    verbs: ["create", "update", "patch", "delete"]
+    resources:
+    - group: ""
+      resources: ["secrets", "configmaps"]
+    - group: "rbac.authorization.k8s.io"
+      resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    - group: "apps"
+      resources: ["deployments", "statefulsets", "daemonsets"]
+    - group: "batch"
+      resources: ["jobs", "cronjobs"]
+    - group: "networking.k8s.io"
+      resources: ["networkpolicies"]
+  
+  # Log authentication and authorization
+  - level: Metadata
+    verbs: ["create", "update", "patch", "delete"]
+    resources:
+    - group: "authentication.k8s.io"
+      resources: ["tokenreviews"]
+    - group: "authorization.k8s.io"
+      resources: ["subjectaccessreviews"]
+  
+  # Log exec, attach, port-forward at Metadata level
+  - level: Metadata
+    resources:
+    - group: ""
+      resources: ["pods/exec", "pods/attach", "pods/portforward"]
+  
+  # Log all requests to secrets at Metadata level (not RequestResponse to avoid logging secret data)
+  - level: Metadata
+    verbs: ["get", "list", "watch"]
+    resources:
+    - group: ""
+      resources: ["secrets"]
+  
+  # Log all requests at Metadata level from specific users
+  - level: Metadata
+    users:
+    - "system:kube-controller-manager"
+    - "system:kube-scheduler"
+    - "system:serviceaccount:kube-system:endpoint-controller"
+  
+  # Log failed requests
+  - level: Metadata
+    omitStages:
+    - RequestReceived
+    users:
+    - "system:anonymous"
+  
+  # Don't log read-only requests to non-sensitive resources
+  - level: None
+    verbs: ["get", "list", "watch"]
+    resources:
+    - group: ""
+      resources: ["events", "nodes", "nodes/status", "nodes/spec"]
+  
+  # Don't log health checks
+  - level: None
+    users:
+    - "system:kube-proxy"
+    verbs: ["watch"]
+    resources:
+    - group: ""
+      resources: ["endpoints", "services"]
+  
+  # Don't log requests from kubelet
+  - level: None
+    userGroups: ["system:nodes"]
+    verbs: ["get"]
+    resources:
+    - group: ""
+      resources: ["nodes", "nodes/status"]
+  
+  # Default: log everything else at Metadata level
+  - level: Metadata
+    omitStages:
+    - RequestReceived

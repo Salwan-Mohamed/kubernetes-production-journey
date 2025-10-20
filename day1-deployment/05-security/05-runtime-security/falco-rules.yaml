@@ -1,0 +1,249 @@
+---
+# Falco custom rules for production
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-rules
+  namespace: falco
+data:
+  custom-rules.yaml: |
+    # Detect unauthorized process execution
+    - rule: Unauthorized Process in Container
+      desc: Detect execution of processes not in allowed list
+      condition: >
+        spawned_process and
+        container and
+        not proc.name in (allowed_processes)
+      output: >
+        Unauthorized process started in container
+        (user=%user.name command=%proc.cmdline container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [container, process]
+    
+    # Detect shell in container
+    - rule: Shell Spawned in Container
+      desc: A shell was spawned in a container
+      condition: >
+        spawned_process and
+        container and
+        proc.name in (shell_binaries) and
+        not proc.pname in (allowed_parent_processes)
+      output: >
+        Shell spawned in container
+        (user=%user.name shell=%proc.name parent=%proc.pname
+        container=%container.name image=%container.image.repository)
+      priority: WARNING
+      tags: [container, shell, mitre_execution]
+    
+    # Detect sensitive file access
+    - rule: Sensitive File Access
+      desc: Detect access to sensitive files
+      condition: >
+        open_read and
+        container and
+        fd.name in (sensitive_files)
+      output: >
+        Sensitive file accessed
+        (user=%user.name file=%fd.name container=%container.name
+        image=%container.image.repository command=%proc.cmdline)
+      priority: WARNING
+      tags: [filesystem, sensitive_data]
+    
+    # Detect outbound connections to suspicious destinations
+    - rule: Outbound Connection to Suspicious Destination
+      desc: Detect network connections to suspicious IPs or domains
+      condition: >
+        outbound and
+        container and
+        not fd.sip in (allowed_outbound_ips) and
+        not fd.sip.name in (allowed_domains)
+      output: >
+        Suspicious outbound connection
+        (user=%user.name destination=%fd.sip:%fd.sport
+        container=%container.name command=%proc.cmdline)
+      priority: WARNING
+      tags: [network, exfiltration]
+    
+    # Detect privilege escalation attempts
+    - rule: Privilege Escalation Attempt
+      desc: Detect attempts to escalate privileges
+      condition: >
+        spawned_process and
+        container and
+        proc.name in (privilege_escalation_binaries) and
+        proc.args contains "-p"
+      output: >
+        Privilege escalation attempt detected
+        (user=%user.name command=%proc.cmdline container=%container.name)
+      priority: CRITICAL
+      tags: [privilege_escalation, mitre_privilege_escalation]
+    
+    # Detect crypto mining activity
+    - rule: Crypto Mining Activity
+      desc: Detect potential crypto mining
+      condition: >
+        spawned_process and
+        container and
+        (proc.name in (crypto_mining_binaries) or
+         proc.cmdline contains "stratum+tcp" or
+         proc.cmdline contains "xmr-stak")
+      output: >
+        Crypto mining activity detected
+        (user=%user.name command=%proc.cmdline container=%container.name)
+      priority: CRITICAL
+      tags: [malware, crypto_mining]
+    
+    # Detect container escape attempts
+    - rule: Container Escape Attempt
+      desc: Detect attempts to escape container
+      condition: >
+        spawned_process and
+        container and
+        (proc.name in (container_escape_binaries) or
+         proc.cmdline contains "nsenter" or
+         proc.cmdline contains "docker" or
+         proc.cmdline contains "runc")
+      output: >
+        Container escape attempt detected
+        (user=%user.name command=%proc.cmdline container=%container.name)
+      priority: CRITICAL
+      tags: [container_escape, mitre_escape]
+    
+    # Lists and macros
+    - list: shell_binaries
+      items: [bash, sh, zsh, fish, csh, tcsh, dash]
+    
+    - list: sensitive_files
+      items:
+        - /etc/shadow
+        - /etc/passwd
+        - /etc/sudoers
+        - /root/.ssh/id_rsa
+        - /home/*/.ssh/id_rsa
+        - /var/run/secrets/kubernetes.io/serviceaccount/token
+    
+    - list: crypto_mining_binaries
+      items: [xmrig, ethminer, cgminer, bfgminer]
+    
+    - list: privilege_escalation_binaries
+      items: [sudo, su, doas]
+    
+    - list: container_escape_binaries
+      items: [nsenter, runc, docker, ctr, crictl]
+    
+    - list: allowed_processes
+      items: [nginx, node, python, java, postgres]
+    
+    - list: allowed_parent_processes
+      items: [containerd-shim, systemd]
+---
+# Falco DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: falco
+spec:
+  selector:
+    matchLabels:
+      app: falco
+  template:
+    metadata:
+      labels:
+        app: falco
+    spec:
+      serviceAccountName: falco
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: falco
+        image: falcosecurity/falco:0.36.2
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        volumeMounts:
+        - name: docker-socket
+          mountPath: /host/var/run/docker.sock
+        - name: dev
+          mountPath: /host/dev
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: boot
+          mountPath: /host/boot
+          readOnly: true
+        - name: lib-modules
+          mountPath: /host/lib/modules
+          readOnly: true
+        - name: usr
+          mountPath: /host/usr
+          readOnly: true
+        - name: etc
+          mountPath: /host/etc
+          readOnly: true
+        - name: custom-rules
+          mountPath: /etc/falco/rules.d
+      volumes:
+      - name: docker-socket
+        hostPath:
+          path: /var/run/docker.sock
+      - name: dev
+        hostPath:
+          path: /dev
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: boot
+        hostPath:
+          path: /boot
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+      - name: usr
+        hostPath:
+          path: /usr
+      - name: etc
+        hostPath:
+          path: /etc
+      - name: custom-rules
+        configMap:
+          name: falco-rules
+---
+# Falcosidekick for alert routing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: falcosidekick
+  namespace: falco
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: falcosidekick
+  template:
+    metadata:
+      labels:
+        app: falcosidekick
+    spec:
+      containers:
+      - name: falcosidekick
+        image: falcosecurity/falcosidekick:2.28.0
+        env:
+        - name: SLACK_WEBHOOKURL
+          valueFrom:
+            secretKeyRef:
+              name: falco-secrets
+              key: slack-webhook
+        - name: SLACK_MINIMUMPRIORITY
+          value: "warning"
+        - name: SLACK_OUTPUTFORMAT
+          value: "all"
+        ports:
+        - containerPort: 2801

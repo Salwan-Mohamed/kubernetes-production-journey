@@ -1,0 +1,76 @@
+---
+# SLSA Provenance generator configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slsa-provenance-config
+  namespace: cicd
+data:
+  generate-provenance.sh: |
+    #!/bin/bash
+    # SLSA Provenance Generation Script
+    set -e
+    
+    IMAGE=$1
+    BUILD_ID=$2
+    
+    cat > slsa-provenance.json <<EOF
+    {
+      "_type": "https://in-toto.io/Statement/v0.1",
+      "subject": [{
+        "name": "$IMAGE",
+        "digest": {
+          "sha256": "$(crane digest $IMAGE)"
+        }
+      }],
+      "predicateType": "https://slsa.dev/provenance/v0.2",
+      "predicate": {
+        "builder": {
+          "id": "$BUILDER_ID"
+        },
+        "buildType": "https://tekton.dev/attestations/chains/pipelinerun@v2",
+        "invocation": {
+          "configSource": {
+            "uri": "$GIT_REPO",
+            "digest": {
+              "sha1": "$GIT_COMMIT"
+            },
+            "entryPoint": "$PIPELINE_NAME"
+          },
+          "parameters": {
+            "BUILD_ID": "$BUILD_ID",
+            "BRANCH": "$GIT_BRANCH"
+          },
+          "environment": {
+            "kubernetes": {
+              "namespace": "$NAMESPACE",
+              "serviceAccount": "$SERVICE_ACCOUNT"
+            }
+          }
+        },
+        "buildConfig": {
+          "steps": $PIPELINE_STEPS
+        },
+        "metadata": {
+          "buildStartedOn": "$BUILD_START_TIME",
+          "buildFinishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "completeness": {
+            "parameters": true,
+            "environment": true,
+            "materials": true
+          },
+          "reproducible": false
+        },
+        "materials": [
+          {
+            "uri": "$GIT_REPO",
+            "digest": {
+              "sha1": "$GIT_COMMIT"
+            }
+          }
+        ]
+      }
+    }
+    EOF
+    
+    echo "SLSA Provenance generated: slsa-provenance.json"

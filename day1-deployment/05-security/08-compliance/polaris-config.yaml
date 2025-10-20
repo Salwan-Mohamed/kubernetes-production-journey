@@ -1,0 +1,51 @@
+---
+# Polaris configuration for workload validation
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: polaris-config
+  namespace: polaris
+data:
+  config.yaml: |
+    checks:
+      # Security checks
+      hostIPCSet: warning
+      hostNetworkSet: warning
+      hostPIDSet: warning
+      hostPortSet: warning
+      privilegeEscalationAllowed: danger
+      readOnlyRootFilesystem: warning
+      runAsRootAllowed: danger
+      runAsPrivileged: danger
+      notReadOnlyRootFilesystem: warning
+      
+      # Image checks
+      tagNotSpecified: danger
+      pullPolicyNotAlways: warning
+      
+      # Health checks
+      readinessProbeMissing: warning
+      livenessProbeMissing: warning
+      
+      # Resource checks
+      cpuRequestsMissing: warning
+      cpuLimitsMissing: warning
+      memoryRequestsMissing: warning
+      memoryLimitsMissing: warning
+      
+      # Networking
+      insecureCapabilities: danger
+      dangerousCapabilities: danger
+      
+    exemptions:
+      - namespace: kube-system
+      - namespace: kube-public
+      - namespace: kube-node-lease
+      - controllerNames:
+        - cert-manager
+        - prometheus-operator
+    
+    mutations:
+      - pullPolicyNotAlways
+      - cpuRequestsMissing
+      - memoryRequestsMissing

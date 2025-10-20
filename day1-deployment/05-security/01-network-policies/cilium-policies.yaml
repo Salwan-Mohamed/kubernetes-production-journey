@@ -1,0 +1,137 @@
+---
+# Cilium Network Policy - Deny All by Default
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-all-default
+  namespace: production
+spec:
+  endpointSelector: {}
+  ingress:
+  - {}
+  egress:
+  - {}
+---
+# Allow DNS queries
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: production
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
+      rules:
+        dns:
+        - matchPattern: "*"
+---
+# Allow backend to database communication
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: backend-to-db
+  namespace: production
+spec:
+  endpointSelector:
+    matchLabels:
+      app: backend
+      tier: application
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: postgres
+        tier: database
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+---
+# Allow frontend to backend with L7 HTTP filtering
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: frontend-to-backend
+  namespace: production
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+      tier: web
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: backend
+        tier: application
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+      rules:
+        http:
+        - method: "GET|POST|PUT|DELETE"
+          path: "/api/.*"
+---
+# Ingress from LoadBalancer to frontend
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ingress-to-frontend
+  namespace: production
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+      tier: web
+  ingress:
+  - fromEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP
+      - port: "443"
+        protocol: TCP
+---
+# Allow egress to external APIs (with FQDN filtering)
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-external-apis
+  namespace: production
+spec:
+  endpointSelector:
+    matchLabels:
+      app: backend
+  egress:
+  - toFQDNs:
+    - matchName: "api.stripe.com"
+    - matchName: "api.sendgrid.com"
+    - matchPattern: "*.amazonaws.com"
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+---
+# Cluster-wide policy: Block access to metadata service
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: block-metadata-service
+spec:
+  endpointSelector: {}
+  egress:
+  - toCIDR:
+    - 169.254.169.254/32
+    - fd00:ec2::254/128
+  egressDeny:
+  - toCIDR:
+    - 169.254.169.254/32
+    - fd00:ec2::254/128
