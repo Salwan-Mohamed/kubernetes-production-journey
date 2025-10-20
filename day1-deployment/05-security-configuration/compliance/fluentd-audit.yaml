@@ -1,0 +1,109 @@
+---
+# DaemonSet to collect audit logs with Fluentd
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd-audit-logs
+  namespace: kube-system
+  labels:
+    app: fluentd-audit
+spec:
+  selector:
+    matchLabels:
+      app: fluentd-audit
+  template:
+    metadata:
+      labels:
+        app: fluentd-audit
+    spec:
+      serviceAccountName: fluentd
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        effect: NoSchedule
+      
+      containers:
+      - name: fluentd
+        image: fluent/fluentd-kubernetes-daemonset:v1-debian-elasticsearch
+        env:
+        - name: FLUENT_ELASTICSEARCH_HOST
+          value: "elasticsearch.logging.svc.cluster.local"
+        - name: FLUENT_ELASTICSEARCH_PORT
+          value: "9200"
+        - name: FLUENT_ELASTICSEARCH_SCHEME
+          value: "http"
+        - name: FLUENT_ELASTICSEARCH_LOGSTASH_PREFIX
+          value: "k8s-audit"
+        - name: FLUENT_ELASTICSEARCH_LOGSTASH_FORMAT
+          value: "true"
+        
+        resources:
+          limits:
+            memory: 512Mi
+            cpu: 200m
+          requests:
+            memory: 256Mi
+            cpu: 100m
+        
+        volumeMounts:
+        - name: audit-logs
+          mountPath: /var/log/kubernetes
+          readOnly: true
+        - name: fluentd-config
+          mountPath: /fluentd/etc
+      
+      volumes:
+      - name: audit-logs
+        hostPath:
+          path: /var/log/kubernetes
+          type: Directory
+      - name: fluentd-config
+        configMap:
+          name: fluentd-audit-config
+
+---
+# ConfigMap for Fluentd audit log parsing
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-audit-config
+  namespace: kube-system
+data:
+  fluent.conf: |
+    <source>
+      @type tail
+      path /var/log/kubernetes/audit.log
+      pos_file /var/log/fluentd-audit.pos
+      tag k8s.audit
+      <parse>
+        @type json
+        time_key requestReceivedTimestamp
+        time_format %Y-%m-%dT%H:%M:%S.%NZ
+      </parse>
+    </source>
+    
+    <filter k8s.audit>
+      @type record_transformer
+      <record>
+        cluster_name "#{ENV['CLUSTER_NAME'] || 'production'}}"
+      </record>
+    </filter>
+    
+    <match k8s.audit>
+      @type elasticsearch
+      host "#{ENV['FLUENT_ELASTICSEARCH_HOST']}"
+      port "#{ENV['FLUENT_ELASTICSEARCH_PORT']}"
+      scheme "#{ENV['FLUENT_ELASTICSEARCH_SCHEME']}"
+      logstash_format true
+      logstash_prefix "#{ENV['FLUENT_ELASTICSEARCH_LOGSTASH_PREFIX']}"
+      <buffer>
+        @type file
+        path /var/log/fluentd-buffers/audit.buffer
+        flush_mode interval
+        flush_interval 10s
+        flush_thread_count 2
+        retry_type exponential_backoff
+        retry_wait 1s
+        retry_max_interval 60s
+        retry_timeout 1h
+      </buffer>
+    </match>
