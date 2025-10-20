@@ -1,0 +1,80 @@
+# Kubernetes Audit Policy
+# Define what events should be logged and at what level
+# Place this file at: /etc/kubernetes/audit-policy.yaml
+
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - "RequestReceived"
+rules:
+  # Log all requests at Metadata level for these critical resources
+  - level: Metadata
+    resources:
+    - group: ""
+      resources: ["secrets", "configmaps"]
+    - group: "rbac.authorization.k8s.io"
+      resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+  
+  # Log pod exec/attach at RequestResponse level (captures commands)
+  - level: RequestResponse
+    verbs: ["create"]
+    resources:
+    - group: ""
+      resources: ["pods/exec", "pods/attach", "pods/portforward"]
+  
+  # Log authentication and authorization
+  - level: Metadata
+    omitStages:
+    - "RequestReceived"
+    userGroups:
+    - "system:authenticated"
+    - "system:unauthenticated"
+  
+  # Log security policy changes
+  - level: RequestResponse
+    resources:
+    - group: "policy"
+      resources: ["podsecuritypolicies"]
+    - group: "networking.k8s.io"
+      resources: ["networkpolicies"]
+  
+  # Log admission webhook configuration changes
+  - level: RequestResponse
+    resources:
+    - group: "admissionregistration.k8s.io"
+      resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+  
+  # Log certificate signing requests
+  - level: Metadata
+    resources:
+    - group: "certificates.k8s.io"
+      resources: ["certificatesigningrequests"]
+  
+  # Exclude health checks from logs
+  - level: None
+    users: ["system:kube-proxy"]
+    verbs: ["watch"]
+    resources:
+    - group: ""
+      resources: ["endpoints", "services", "services/status"]
+  
+  # Exclude kubelet read-only operations
+  - level: None
+    users: ["kubelet"]
+    verbs: ["get"]
+    resources:
+    - group: ""
+      resources: ["nodes", "nodes/status"]
+  
+  # Exclude kube-controller-manager and kube-scheduler
+  - level: None
+    userGroups: ["system:nodes"]
+    verbs: ["get"]
+    resources:
+    - group: ""
+      resources: ["nodes", "nodes/status"]
+  
+  # Default: log at Metadata level
+  - level: Metadata
+    omitStages:
+    - "RequestReceived"

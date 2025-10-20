@@ -1,0 +1,177 @@
+# Falco Helm Values
+# Runtime security and threat detection
+
+driver:
+  kind: modern_ebpf  # Use eBPF for better performance
+
+falco:
+  # Rule files to load
+  rules_file:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/k8s_audit_rules.yaml
+    - /etc/falco/rules.d
+  
+  # Logging configuration
+  json_output: true
+  json_include_output_property: true
+  log_stderr: true
+  log_syslog: false
+  log_level: info
+  
+  # Output channels
+  file_output:
+    enabled: true
+    keep_alive: false
+    filename: /var/log/falco/events.log
+  
+  http_output:
+    enabled: true
+    url: "http://falcosidekick:2801"
+  
+  # gRPC output for integrations
+  grpc:
+    enabled: true
+    bind_address: "0.0.0.0:5060"
+    threadiness: 8
+  
+  # Syscall event drops handling
+  syscall_event_drops:
+    threshold: 0.1
+    actions:
+      - log
+      - alert
+  
+  # Priority threshold
+  priority: debug
+  buffered_outputs: false
+
+# Custom rules
+customRules:
+  production-rules.yaml: |-
+    # Custom production security rules
+    
+    - rule: Unauthorized Process in Container
+      desc: Detect processes not in the allowed list
+      condition: >
+        spawned_process and container and
+        not proc.name in (node, java, python, ruby)
+      output: >
+        Unauthorized process started in container
+        (user=%user.name command=%proc.cmdline container=%container.name image=%container.image.repository)
+      priority: WARNING
+      tags: [container, process]
+    
+    - rule: Sensitive File Access in Container
+      desc: Detect access to sensitive files
+      condition: >
+        open_read and container and
+        (fd.name startswith /etc/shadow or
+         fd.name startswith /etc/sudoers or
+         fd.name startswith /root/.ssh)
+      output: >
+        Sensitive file accessed in container
+        (user=%user.name file=%fd.name container=%container.name image=%container.image.repository)
+      priority: WARNING
+      tags: [container, filesystem]
+    
+    - rule: Container Privilege Escalation
+      desc: Detect privilege escalation attempts
+      condition: >
+        spawned_process and container and
+        proc.name in (sudo, su, setuid) and
+        not user.name = root
+      output: >
+        Privilege escalation attempt detected
+        (user=%user.name command=%proc.cmdline container=%container.name)
+      priority: CRITICAL
+      tags: [container, privilege_escalation]
+    
+    - rule: Crypto Mining Activity
+      desc: Detect cryptocurrency mining
+      condition: >
+        spawned_process and container and
+        (proc.name in (xmrig, minerd, cpuminer) or
+         proc.cmdline contains "stratum+tcp")
+      output: >
+        Possible crypto mining detected
+        (user=%user.name command=%proc.cmdline container=%container.name)
+      priority: CRITICAL
+      tags: [container, malware]
+    
+    - rule: Reverse Shell Detected
+      desc: Detect reverse shell connections
+      condition: >
+        spawned_process and container and
+        ((proc.name in (bash, sh, zsh) and
+          (proc.args contains "-i" or proc.args contains "/dev/tcp")) or
+         (proc.name = nc and proc.args contains "-e"))
+      output: >
+        Possible reverse shell detected
+        (user=%user.name command=%proc.cmdline container=%container.name)
+      priority: CRITICAL
+      tags: [container, reverse_shell]
+    
+    - rule: Kubernetes Secret Access
+      desc: Detect access to Kubernetes secrets
+      condition: >
+        open_read and container and
+        fd.name startswith /var/run/secrets/kubernetes.io
+      output: >
+        Kubernetes secret accessed
+        (user=%user.name file=%fd.name container=%container.name process=%proc.name)
+      priority: INFO
+      tags: [container, kubernetes, secrets]
+
+# Falco Sidekick for alert routing
+falcosidekick:
+  enabled: true
+  replicas: 2
+  
+  config:
+    # Slack integration
+    slack:
+      webhookurl: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+      minimumpriority: "warning"
+      messageformat: "long"
+    
+    # PagerDuty integration
+    pagerduty:
+      routingkey: "YOUR_ROUTING_KEY"
+      minimumpriority: "critical"
+    
+    # Elasticsearch integration
+    elasticsearch:
+      hostport: "http://elasticsearch:9200"
+      index: "falco"
+      type: "event"
+      minimumpriority: "debug"
+    
+    # Prometheus metrics
+    prometheus:
+      extralabels: "environment:production"
+  
+  webui:
+    enabled: true
+    replicas: 1
+
+# Resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Tolerations for running on all nodes
+tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+
+# Service Monitor for Prometheus
+serviceMonitor:
+  enabled: true
+  interval: 30s

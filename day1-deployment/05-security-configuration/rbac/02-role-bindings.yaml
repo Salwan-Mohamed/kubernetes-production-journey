@@ -1,0 +1,78 @@
+---
+# RoleBinding: Frontend Service Account to Config Reader
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: frontend-config-reader
+  namespace: production
+subjects:
+- kind: ServiceAccount
+  name: frontend
+  namespace: production
+roleRef:
+  kind: Role
+  name: app-config-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# RoleBinding: Backend Service Account to Config Reader
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backend-config-reader
+  namespace: production
+subjects:
+- kind: ServiceAccount
+  name: backend
+  namespace: production
+roleRef:
+  kind: Role
+  name: app-config-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRoleBinding: Prometheus to Metrics Reader
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: metrics-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# RoleBinding: DevOps Team to Developer Read Access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devops-team-read
+  namespace: production
+subjects:
+# OIDC group binding example
+- kind: Group
+  name: devops-team
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: developer-read
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRoleBinding: SRE Team Full Access (Emergency Access)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sre-team-full-access
+subjects:
+- kind: Group
+  name: sre-oncall
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: sre-full-access
+  apiGroup: rbac.authorization.k8s.io

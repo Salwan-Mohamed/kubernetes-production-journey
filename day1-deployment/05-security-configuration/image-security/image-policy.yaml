@@ -1,0 +1,160 @@
+---
+# Kyverno Policy - Require Image Signature Verification
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signatures
+  annotations:
+    policies.kyverno.io/title: Verify Image Signatures with Cosign
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      All images must be signed with Cosign and verified before deployment.
+spec:
+  validationFailureAction: enforce
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+  - name: verify-signature
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+          - staging
+    verifyImages:
+    - imageReferences:
+      - "myregistry.io/*"
+      attestors:
+      - count: 1
+        entries:
+        - keys:
+            publicKeys: |
+              -----BEGIN PUBLIC KEY-----
+              MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+              -----END PUBLIC KEY-----
+      # Require attestations (SLSA provenance)
+      attestations:
+      - predicateType: https://slsa.dev/provenance/v0.2
+        conditions:
+        - all:
+          - key: "{{ builder.id }}"
+            operator: Equals
+            value: "https://github.com/slsa-framework/slsa-github-generator/.github/workflows/builder.yml@refs/tags/v1.2.0"
+
+---
+# Kyverno Policy - Disallow Latest Tag
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow Latest Tag
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      Using 'latest' tag is not allowed. Images must use specific version tags.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+  - name: require-image-tag
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+          - staging
+    validate:
+      message: "Using 'latest' or no tag is not allowed. Use specific version tags."
+      pattern:
+        spec:
+          containers:
+          - image: "!*:latest | !*@*"
+
+---
+# Kyverno Policy - Allowed Registries
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: allowed-registries
+  annotations:
+    policies.kyverno.io/title: Restrict Image Registries
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      Only approved container registries are allowed.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+  - name: validate-registries
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+          - staging
+    validate:
+      message: >
+        Images must be from approved registries:
+        - myregistry.io
+        - ghcr.io/myorg
+        - 123456789012.dkr.ecr.us-east-1.amazonaws.com
+      pattern:
+        spec:
+          containers:
+          - image: "myregistry.io/* | ghcr.io/myorg/* | 123456789012.dkr.ecr.us-east-1.amazonaws.com/*"
+
+---
+# Kyverno Policy - Block High/Critical Vulnerabilities
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-vulnerable-images
+  annotations:
+    policies.kyverno.io/title: Block Images with Critical Vulnerabilities
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/description: >
+      Blocks deployment of images with CRITICAL or HIGH severity vulnerabilities.
+spec:
+  validationFailureAction: enforce
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+  - name: check-vulnerabilities
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+    verifyImages:
+    - imageReferences:
+      - "myregistry.io/*"
+      attestors:
+      - count: 1
+        entries:
+        - keys:
+            publicKeys: |
+              -----BEGIN PUBLIC KEY-----
+              MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+              -----END PUBLIC KEY-----
+      attestations:
+      - predicateType: https://cosign.sigstore.dev/attestation/vuln/v1
+        conditions:
+        - all:
+          - key: "{{ scanner.result.vulnerabilities[?severity=='CRITICAL'] | length(@) }}"
+            operator: Equals
+            value: 0
+          - key: "{{ scanner.result.vulnerabilities[?severity=='HIGH'] | length(@) }}"
+            operator: LessThanOrEquals
+            value: 5  # Max 5 HIGH vulnerabilities allowed

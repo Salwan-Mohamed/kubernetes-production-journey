@@ -1,0 +1,19 @@
+# Kubernetes API Server Audit Log Configuration
+# Add these flags to kube-apiserver configuration
+
+# Enable audit logging
+--audit-log-path=/var/log/kubernetes/audit.log
+--audit-log-maxage=30
+--audit-log-maxbackup=10
+--audit-log-maxsize=100
+--audit-policy-file=/etc/kubernetes/audit-policy.yaml
+
+# Dynamic audit configuration (optional)
+--audit-dynamic-configuration
+
+# Audit webhook (send to external system)
+--audit-webhook-config-file=/etc/kubernetes/audit-webhook-config.yaml
+--audit-webhook-initial-backoff=10s
+--audit-webhook-batch-buffer-size=10000
+--audit-webhook-batch-max-size=400
+--audit-webhook-batch-max-wait=30s

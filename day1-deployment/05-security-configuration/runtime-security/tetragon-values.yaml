@@ -1,0 +1,59 @@
+# Cilium Tetragon Helm Values
+# eBPF-based runtime security and observability
+
+tetragon:
+  enabled: true
+  
+  # Resource configuration
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  
+  # Export configuration
+  exportFilename: /var/run/cilium/tetragon/tetragon.log
+  exportFileMaxSizeMB: 10
+  exportFileMaxBackups: 5
+  
+  # gRPC server
+  grpc:
+    enabled: true
+    address: "localhost:54321"
+  
+  # Prometheus metrics
+  prometheus:
+    enabled: true
+    address: ""
+    port: 2112
+
+# Tracing Policies
+tracingPolicy:
+  enabled: true
+
+# Tetragon Operator
+tetragonOperator:
+  enabled: true
+  replicas: 1
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Export logs to external systems
+export:
+  stdout:
+    enabled: true
+    enabledCommand: true
+    enabledArgs: true
+  
+  # Fluentd forwarding
+  fluentd:
+    enabled: false
+    address: "fluentd.logging.svc.cluster.local:24224"
