@@ -1,0 +1,23 @@
+---
+# Allow DNS Resolution
+# Permits pods to query DNS (kube-dns/CoreDNS) on port 53
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-access
+  namespace: production
+spec:
+  podSelector: {}  # Applies to all pods
+  policyTypes:
+  - Egress
+  egress:
+  # Allow DNS queries to kube-system namespace
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

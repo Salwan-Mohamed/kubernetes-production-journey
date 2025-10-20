@@ -1,0 +1,27 @@
+---
+# Default Deny All Ingress Traffic
+# This policy denies all incoming traffic to pods in the namespace
+# Apply this first, then whitelist specific traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: production
+spec:
+  podSelector: {}  # Applies to all pods
+  policyTypes:
+  - Ingress
+
+---
+# Default Deny All Egress Traffic
+# This policy denies all outgoing traffic from pods
+# Then selectively allow necessary egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: production
+spec:
+  podSelector: {}  # Applies to all pods
+  policyTypes:
+  - Egress

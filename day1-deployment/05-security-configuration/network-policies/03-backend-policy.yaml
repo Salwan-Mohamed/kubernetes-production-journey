@@ -1,0 +1,79 @@
+---
+# Backend API Network Policy
+# Allows:
+# - Ingress from frontend only
+# - Egress to database and cache
+# - DNS resolution
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-network-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+      tier: api
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  # Allow traffic from frontend only
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frontend
+          tier: web
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Allow traffic from same backend pods (for inter-service communication)
+  - from:
+    - podSelector:
+        matchLabels:
+          app: backend
+          tier: api
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  egress:
+  # Allow to PostgreSQL database
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgres
+          tier: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  
+  # Allow to Redis cache
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+          tier: cache
+    ports:
+    - protocol: TCP
+      port: 6379
+  
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # Allow HTTPS for external API calls
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
