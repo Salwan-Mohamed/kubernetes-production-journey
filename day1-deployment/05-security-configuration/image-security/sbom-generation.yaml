@@ -1,0 +1,92 @@
+---
+# CronJob to Generate SBOM for Images
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sbom-generator
+  namespace: security
+spec:
+  # Run daily at 2 AM
+  schedule: "0 2 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: sbom-generator
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: sbom-generator
+          
+          containers:
+          - name: syft
+            image: anchore/syft:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              #!/bin/sh
+              set -e
+              
+              # Get list of images from all pods
+              kubectl get pods --all-namespaces -o json | \
+                jq -r '.items[].spec.containers[].image' | \
+                sort -u > /tmp/images.txt
+              
+              # Generate SBOM for each image
+              while read -r image; do
+                echo "Generating SBOM for: $image"
+                
+                # Generate SBOM in CycloneDX format
+                syft "$image" -o cyclonedx-json > "/tmp/sbom-$(echo $image | tr '/' '-' | tr ':' '-').json"
+                
+                # Upload to S3 or artifact repository
+                # aws s3 cp "/tmp/sbom-*.json" s3://sbom-bucket/
+                
+              done < /tmp/images.txt
+              
+              echo "SBOM generation complete"
+            
+            volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          
+          volumes:
+          - name: tmp
+            emptyDir: {}
+
+---
+# ServiceAccount for SBOM Generator
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sbom-generator
+  namespace: security
+
+---
+# ClusterRole for Reading Pod Images
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sbom-generator
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sbom-generator
+subjects:
+- kind: ServiceAccount
+  name: sbom-generator
+  namespace: security
+roleRef:
+  kind: ClusterRole
+  name: sbom-generator
+  apiGroup: rbac.authorization.k8s.io
