@@ -1,0 +1,146 @@
+# HashiCorp Vault Helm Values
+# Production-grade configuration with HA and auto-unseal
+
+global:
+  enabled: true
+  tlsDisable: false
+
+injector:
+  enabled: true
+  replicas: 2
+  
+  # Resource limits for sidecar injector
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+  
+  # Metrics
+  metrics:
+    enabled: true
+
+server:
+  # High Availability mode
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: true
+      setNodeId: true
+      
+      config: |
+        ui = true
+        
+        listener "tcp" {
+          tls_disable = false
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_cert_file = "/vault/userconfig/vault-tls/tls.crt"
+          tls_key_file  = "/vault/userconfig/vault-tls/tls.key"
+          tls_client_ca_file = "/vault/userconfig/vault-tls/ca.crt"
+        }
+        
+        storage "raft" {
+          path = "/vault/data"
+          
+          retry_join {
+            leader_api_addr = "https://vault-0.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+          }
+          
+          retry_join {
+            leader_api_addr = "https://vault-1.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+          }
+          
+          retry_join {
+            leader_api_addr = "https://vault-2.vault-internal:8200"
+            leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+          }
+        }
+        
+        # Auto-unseal with AWS KMS (change for your cloud provider)
+        seal "awskms" {
+          region     = "us-east-1"
+          kms_key_id = "alias/vault-unseal-key"
+        }
+        
+        service_registration "kubernetes" {}
+        
+        telemetry {
+          prometheus_retention_time = "30s"
+          disable_hostname = true
+        }
+  
+  # Resource requests and limits
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+  
+  # Persistent storage
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: gp3
+    accessMode: ReadWriteOnce
+  
+  # Audit storage
+  auditStorage:
+    enabled: true
+    size: 5Gi
+    storageClass: gp3
+    accessMode: ReadWriteOnce
+  
+  # Service configuration
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 8200
+    targetPort: 8200
+  
+  # Ingress for UI
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - host: vault.example.com
+        paths:
+          - /
+    tls:
+      - secretName: vault-tls
+        hosts:
+          - vault.example.com
+  
+  # Extra volumes for TLS certificates
+  volumes:
+    - name: vault-tls
+      secret:
+        secretName: vault-tls
+  
+  volumeMounts:
+    - name: vault-tls
+      mountPath: /vault/userconfig/vault-tls
+      readOnly: true
+  
+  # ServiceAccount
+  serviceAccount:
+    create: true
+    name: vault
+
+ui:
+  enabled: true
+  serviceType: "ClusterIP"
+  externalPort: 8200
+
+# Prometheus ServiceMonitor
+serverTelemetry:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
