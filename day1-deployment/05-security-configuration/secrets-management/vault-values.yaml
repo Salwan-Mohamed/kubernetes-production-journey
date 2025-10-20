@@ -1,5 +1,5 @@
 # HashiCorp Vault Helm Values
-# Production-grade configuration with HA and auto-unseal
+# Production-ready configuration with HA and auto-unseal
 
 global:
   enabled: true
@@ -9,7 +9,7 @@ injector:
   enabled: true
   replicas: 2
   
-  # Resource limits for sidecar injector
+  # Resource limits for injector
   resources:
     requests:
       memory: 256Mi
@@ -18,24 +18,24 @@ injector:
       memory: 512Mi
       cpu: 500m
   
-  # Metrics
-  metrics:
-    enabled: true
+  # Annotations for sidecar injection
+  annotations:
+    vault.hashicorp.com/agent-inject: "true"
+    vault.hashicorp.com/role: "production-app"
 
 server:
-  # High Availability mode
+  # Production HA configuration
   ha:
     enabled: true
     replicas: 3
     raft:
       enabled: true
       setNodeId: true
-      
       config: |
         ui = true
         
         listener "tcp" {
-          tls_disable = false
+          tls_disable = 0
           address = "[::]:8200"
           cluster_address = "[::]:8201"
           tls_cert_file = "/vault/userconfig/vault-tls/tls.crt"
@@ -49,39 +49,40 @@ server:
           retry_join {
             leader_api_addr = "https://vault-0.vault-internal:8200"
             leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+            leader_client_cert_file = "/vault/userconfig/vault-tls/tls.crt"
+            leader_client_key_file = "/vault/userconfig/vault-tls/tls.key"
           }
           
           retry_join {
             leader_api_addr = "https://vault-1.vault-internal:8200"
             leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+            leader_client_cert_file = "/vault/userconfig/vault-tls/tls.crt"
+            leader_client_key_file = "/vault/userconfig/vault-tls/tls.key"
           }
           
           retry_join {
             leader_api_addr = "https://vault-2.vault-internal:8200"
             leader_ca_cert_file = "/vault/userconfig/vault-tls/ca.crt"
+            leader_client_cert_file = "/vault/userconfig/vault-tls/tls.crt"
+            leader_client_key_file = "/vault/userconfig/vault-tls/tls.key"
           }
         }
         
-        # Auto-unseal with AWS KMS (change for your cloud provider)
+        # AWS KMS auto-unseal (recommended for production)
         seal "awskms" {
           region     = "us-east-1"
           kms_key_id = "alias/vault-unseal-key"
         }
         
         service_registration "kubernetes" {}
-        
-        telemetry {
-          prometheus_retention_time = "30s"
-          disable_hostname = true
-        }
   
-  # Resource requests and limits
+  # Resources for Vault pods
   resources:
     requests:
       memory: 512Mi
       cpu: 500m
     limits:
-      memory: 2Gi
+      memory: 1Gi
       cpu: 1000m
   
   # Persistent storage
@@ -94,7 +95,7 @@ server:
   # Audit storage
   auditStorage:
     enabled: true
-    size: 5Gi
+    size: 10Gi
     storageClass: gp3
     accessMode: ReadWriteOnce
   
@@ -105,42 +106,22 @@ server:
     port: 8200
     targetPort: 8200
   
-  # Ingress for UI
+  # Ingress for UI (optional)
   ingress:
     enabled: true
     ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
     hosts:
-      - host: vault.example.com
+      - host: vault.production.example.com
         paths:
           - /
     tls:
       - secretName: vault-tls
         hosts:
-          - vault.example.com
-  
-  # Extra volumes for TLS certificates
-  volumes:
-    - name: vault-tls
-      secret:
-        secretName: vault-tls
-  
-  volumeMounts:
-    - name: vault-tls
-      mountPath: /vault/userconfig/vault-tls
-      readOnly: true
-  
-  # ServiceAccount
-  serviceAccount:
-    create: true
-    name: vault
+          - vault.production.example.com
 
 ui:
   enabled: true
-  serviceType: "ClusterIP"
-  externalPort: 8200
-
-# Prometheus ServiceMonitor
-serverTelemetry:
-  serviceMonitor:
-    enabled: true
-    interval: 30s
+  serviceType: ClusterIP
