@@ -1,0 +1,98 @@
+---
+# Tetragon Tracing Policy - File Access Monitoring
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: file-access-monitoring
+spec:
+  kprobes:
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/etc/shadow"
+        - "/etc/sudoers"
+        - "/root/.ssh"
+      matchActions:
+      - action: Post
+
+---
+# Tetragon Tracing Policy - Network Connection Monitoring
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: network-monitoring
+spec:
+  kprobes:
+  - call: "tcp_connect"
+    syscall: false
+    args:
+    - index: 0
+      type: "sock"
+    selectors:
+    - matchActions:
+      - action: Post
+
+---
+# Tetragon Tracing Policy - Process Execution Monitoring
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: process-execution-monitoring
+spec:
+  kprobes:
+  - call: "__x64_sys_execve"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    - index: 1
+      type: "char_buf"
+      sizeArgIndex: 3
+    - index: 2
+      type: "char_buf"
+      sizeArgIndex: 3
+    selectors:
+    - matchBinaries:
+      - operator: "In"
+        values:
+        - "/usr/bin/bash"
+        - "/bin/sh"
+        - "/usr/bin/nc"
+        - "/usr/bin/ncat"
+      matchActions:
+      - action: Post
+
+---
+# Tetragon Tracing Policy - Capability Monitoring
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: capability-monitoring
+spec:
+  kprobes:
+  - call: "cap_capable"
+    syscall: false
+    args:
+    - index: 1
+      type: "int"
+    - index: 2
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 1
+        operator: "InMap"
+        values:
+        - "21"  # CAP_SYS_ADMIN
+        - "22"  # CAP_SYS_BOOT
+        - "34"  # CAP_SYS_MODULE
+      matchActions:
+      - action: Post
