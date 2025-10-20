@@ -1,0 +1,202 @@
+---
+# Kyverno ClusterPolicy - Require Non-Root Containers
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Require runAsNonRoot
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      Containers must run as non-root user. This policy ensures containers
+      cannot run as root (UID 0) for enhanced security.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+  - name: run-as-non-root
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+          - staging
+    validate:
+      message: "Running as root is not allowed. Set runAsNonRoot to true."
+      pattern:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+          containers:
+          - securityContext:
+              runAsNonRoot: true
+
+---
+# Kyverno ClusterPolicy - Require Read-Only Root Filesystem
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-ro-rootfs
+  annotations:
+    policies.kyverno.io/title: Require Read-Only Root Filesystem
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      A read-only root file system prevents tampering and reduces attack surface.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+  - name: require-ro-rootfs
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+    validate:
+      message: "Root filesystem must be read-only. Set readOnlyRootFilesystem to true."
+      pattern:
+        spec:
+          containers:
+          - securityContext:
+              readOnlyRootFilesystem: true
+
+---
+# Kyverno ClusterPolicy - Disallow Privilege Escalation
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privilege-escalation
+  annotations:
+    policies.kyverno.io/title: Disallow Privilege Escalation
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      Privilege escalation allows a process to change security context.
+      This must be prevented in production.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+  - name: disallow-privilege-escalation
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+          - staging
+    validate:
+      message: "Privilege escalation is not allowed. Set allowPrivilegeEscalation to false."
+      pattern:
+        spec:
+          containers:
+          - securityContext:
+              allowPrivilegeEscalation: false
+
+---
+# Kyverno ClusterPolicy - Drop All Capabilities
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: drop-all-capabilities
+  annotations:
+    policies.kyverno.io/title: Drop All Capabilities
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      Drop all Linux capabilities and only add back explicitly needed ones.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+  - name: drop-all-capabilities
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+    validate:
+      message: "All capabilities must be dropped. Use securityContext.capabilities.drop: [ALL]"
+      pattern:
+        spec:
+          containers:
+          - securityContext:
+              capabilities:
+                drop:
+                - "ALL"
+
+---
+# Kyverno ClusterPolicy - Disallow Host Namespaces
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-host-namespaces
+  annotations:
+    policies.kyverno.io/title: Disallow Host Namespaces
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      Sharing host namespaces (PID, IPC, Network) is not allowed.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+  - name: disallow-host-namespaces
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+          - staging
+    validate:
+      message: "Sharing host namespaces is not allowed."
+      pattern:
+        spec:
+          =(hostPID): false
+          =(hostIPC): false
+          =(hostNetwork): false
+
+---
+# Kyverno ClusterPolicy - Require Resource Limits
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      All containers must have CPU and memory limits defined.
+spec:
+  validationFailureAction: enforce
+  background: true
+  rules:
+  - name: require-limits
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          namespaces:
+          - production
+    validate:
+      message: "CPU and memory limits are required."
+      pattern:
+        spec:
+          containers:
+          - resources:
+              limits:
+                memory: "?*"
+                cpu: "?*"
