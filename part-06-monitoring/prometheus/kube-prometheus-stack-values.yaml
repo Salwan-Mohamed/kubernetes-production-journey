@@ -1,0 +1,310 @@
+# Prometheus Operator - Production Configuration
+# Healthcare Platform: 50K patients, 500K requests/day
+
+prometheus:
+  prometheusSpec:
+    # Resource allocation for HA setup
+    resources:
+      requests:
+        memory: 4Gi
+        cpu: 1000m
+      limits:
+        memory: 8Gi
+        cpu: 2000m
+    
+    # Persistent storage
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: fast-ssd
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 100Gi
+    
+    # Retention configuration
+    retention: 15d
+    retentionSize: 90GB
+    
+    # High availability
+    replicas: 2
+    
+    # Scrape configuration
+    scrapeInterval: 15s
+    scrapeTimeout: 10s
+    evaluationInterval: 15s
+    
+    # External labels for multi-cluster
+    externalLabels:
+      cluster: healthcare-prod-us-east
+      environment: production
+      region: us-east-1
+    
+    # Service monitor selector
+    serviceMonitorSelector:
+      matchLabels:
+        prometheus: kube-prometheus
+    
+    # Pod monitor selector
+    podMonitorSelector:
+      matchLabels:
+        prometheus: kube-prometheus
+    
+    # Probe selector
+    probeSelector:
+      matchLabels:
+        prometheus: kube-prometheus
+    
+    # Remote write to Thanos
+    remoteWrite:
+      - url: http://thanos-receive:19291/api/v1/receive
+        queueConfig:
+          maxSamplesPerSend: 10000
+          maxShards: 20
+          capacity: 50000
+        writeRelabelConfigs:
+          - sourceLabels: [__name__]
+            regex: 'container_.*|node_.*|kubelet_.*'
+            action: keep
+    
+    # Alert routing
+    alerting:
+      alertmanagers:
+        - namespace: monitoring
+          name: alertmanager-operated
+          port: web
+          pathPrefix: /
+    
+    # Additional scrape configs
+    additionalScrapeConfigs:
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+
+# Grafana configuration
+grafana:
+  enabled: true
+  
+  # Admin credentials (use external secret in production)
+  adminPassword: changeme-use-external-secret
+  
+  # Persistence
+  persistence:
+    enabled: true
+    storageClassName: fast-ssd
+    size: 10Gi
+  
+  # Resource allocation
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Datasources
+  additionalDataSources:
+    - name: Prometheus
+      type: prometheus
+      url: http://kube-prometheus-stack-prometheus:9090
+      access: proxy
+      isDefault: true
+      jsonData:
+        timeInterval: 15s
+    
+    - name: Loki
+      type: loki
+      url: http://loki-gateway:80
+      access: proxy
+      jsonData:
+        maxLines: 1000
+    
+    - name: Jaeger
+      type: jaeger
+      url: http://jaeger-query:16686
+      access: proxy
+  
+  # Dashboard providers
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+        
+        - name: 'kubernetes'
+          orgId: 1
+          folder: 'Kubernetes'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/kubernetes
+        
+        - name: 'applications'
+          orgId: 1
+          folder: 'Applications'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/applications
+  
+  # RBAC
+  rbac:
+    pspEnabled: false
+  
+  # Ingress (configure based on your ingress controller)
+  ingress:
+    enabled: false
+    # Enable and configure for production
+    # annotations:
+    #   cert-manager.io/cluster-issuer: letsencrypt-prod
+    # hosts:
+    #   - grafana.healthcare-platform.com
+    # tls:
+    #   - secretName: grafana-tls
+    #     hosts:
+    #       - grafana.healthcare-platform.com
+
+# AlertManager configuration
+alertmanager:
+  enabled: true
+  
+  alertmanagerSpec:
+    # Resource allocation
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+    
+    # High availability
+    replicas: 2
+    
+    # Storage
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: fast-ssd
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+  
+  # Configuration will be provided via AlertManager CRD
+  config:
+    global:
+      resolve_timeout: 5m
+    
+    route:
+      group_by: ['alertname', 'cluster', 'service']
+      group_wait: 10s
+      group_interval: 10s
+      repeat_interval: 12h
+      receiver: 'null'
+      routes:
+        - match:
+            severity: critical
+          receiver: pagerduty-critical
+          continue: true
+        
+        - match:
+            severity: critical
+          receiver: slack-critical
+        
+        - match:
+            severity: warning
+          receiver: slack-warnings
+    
+    receivers:
+      - name: 'null'
+      
+      - name: 'pagerduty-critical'
+        pagerduty_configs:
+          - service_key: '<use-external-secret>'
+            description: '{{ .GroupLabels.alertname }}: {{ .GroupLabels.namespace }}'
+      
+      - name: 'slack-critical'
+        slack_configs:
+          - api_url: '<use-external-secret>'
+            channel: '#alerts-critical'
+            title: '🚨 CRITICAL: {{ .GroupLabels.alertname }}'
+            text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+      
+      - name: 'slack-warnings'
+        slack_configs:
+          - api_url: '<use-external-secret>'
+            channel: '#alerts-warnings'
+            title: '⚠️ WARNING: {{ .GroupLabels.alertname }}'
+
+# Prometheus Node Exporter
+nodeExporter:
+  enabled: true
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Kube State Metrics
+kubeStateMetrics:
+  enabled: true
+  
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+
+# Prometheus Operator
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  
+  # Create CRDs
+  createCustomResource: true
+  
+  # Admission webhooks (disable in test environments)
+  admissionWebhooks:
+    enabled: true
+    patch:
+      enabled: true
+
+# Global settings
+global:
+  rbac:
+    create: true
+    pspEnabled: false
